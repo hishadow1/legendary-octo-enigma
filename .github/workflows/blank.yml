@@ -1,4 +1,4 @@
-name: Server Runner with Auto-Restart and Persistence
+name: Self-Hosted Server with Auto-Restart
 
 on:
   workflow_dispatch:
@@ -16,27 +16,27 @@ jobs:
       - name: Install GitHub CLI
         run: sudo apt-get update && sudo apt-get install -y gh
 
-      # Restore previous state if it exists
+      # Restore previous state
       - name: Restore saved state
         uses: actions/cache@v4
         with:
-          path: server_state
-          key: server-state
+          path: /var/lib/pterodactyl/volumes
+          key: pterodactyl-volumes
 
-      # Schedule rerun before timeout
+      # Schedule workflow re-run before GitHub timeout
       - name: Schedule workflow re-run before timeout
         run: |
           (sleep $((5 * 3600 + 40 * 60)) && \
           echo "Triggering rerun..." && \
-          gh workflow run server-runner.yml) &
+          gh workflow run $(basename "${GITHUB_WORKFLOW_REF%/*}")) &
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Write your server config
+      # Write your config
       - name: Write server config
         run: |
-          mkdir -p server_state
-          cat <<EOF > server_state/config.yml
+          sudo mkdir -p /var/lib/pterodactyl/volumes
+          sudo tee /var/lib/pterodactyl/volumes/config.yml > /dev/null <<'EOF'
           debug: false
           uuid: e53ecb53-e284-4d1d-ac98-237fca10bd8d
           token_id: WB9zGpp20CM94cwe
@@ -57,15 +57,17 @@ jobs:
           remote: 'http://100.89.132.120'
           EOF
 
-      # Start server with state directory
+      # Start your server here — replace this with your actual start command
       - name: Start server
         run: |
           echo "Starting server..."
-          ./start-server.sh --data-dir server_state
+          # Example: If it's a binary named server
+          chmod +x ./server || true
+          ./server || echo "Replace './server' with your real start command"
 
-      # Save state at end so next run can continue
+      # Save state at the end
       - name: Save state for next run
         uses: actions/cache@v4
         with:
-          path: server_state
-          key: server-state
+          path: /var/lib/pterodactyl/volumes
+          key: pterodactyl-volumes
