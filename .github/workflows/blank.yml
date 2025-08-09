@@ -1,72 +1,104 @@
-name: Self-Hosted Server with Auto-Restart
+name: Continuous Persistent VPS
 
 on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
   workflow_dispatch:
 
 jobs:
-  run-server:
+  vps-session:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 350  # Just under 6 hours
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install GitHub CLI
+      - name: Install GitHub CLI for auto-rerun
         run: sudo apt-get update && sudo apt-get install -y gh
 
-      # Restore previous state
-      - name: Restore saved state
-        uses: actions/cache@v4
-        with:
-          path: /var/lib/pterodactyl/volumes
-          key: pterodactyl-volumes
-
-      # Schedule workflow re-run before GitHub timeout
-      - name: Schedule workflow re-run before timeout
+      # Schedule self-rerun before timeout
+      - name: Schedule self-rerun before timeout
         run: |
           (sleep $((5 * 3600 + 40 * 60)) && \
           echo "Triggering rerun..." && \
-          gh workflow run $(basename "${GITHUB_WORKFLOW_REF%/*}")) &
+          gh workflow run "${GITHUB_WORKFLOW}") &
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Write your server config
-      - name: Write server config
-        run: |
-          sudo mkdir -p /var/lib/pterodactyl/volumes
-          sudo tee /var/lib/pterodactyl/volumes/config.yml > /dev/null <<'EOF'
-          debug: false
-          uuid: e53ecb53-e284-4d1d-ac98-237fca10bd8d
-          token_id: WB9zGpp20CM94cwe
-          token: Cx3VEJD2Mg1iKary0cljYxhBe4UEx9W7J1Udb8fWlBrbeCbCdVNUYjIWFtfS9ICP
-          api:
-            host: 0.0.0.0
-            port: 8080
-            ssl:
-              enabled: false
-              cert: /etc/letsencrypt/live/100.89.132.120/fullchain.pem
-              key: /etc/letsencrypt/live/100.89.132.120/privkey.pem
-            upload_limit: 100
-          system:
-            data: /var/lib/pterodactyl/volumes
-            sftp:
-              bind_port: 2022
-          allowed_mounts: []
-          remote: 'http://100.89.132.120'
-          EOF
+      - name: Set hostname to biralo
+        run: sudo hostnamectl set-hostname biralo
 
-      # Start your server
-      - name: Start server
-        run: |
-          echo "Starting pterodactyl server..."
-          chmod +x ./pterodactyl || true
-          ./pterodactyl --config /var/lib/pterodactyl/volumes/config.yml
-
-      # Save state for next run
-      - name: Save state for next run
-        uses: actions/cache@v4
+      - name: Download VPS backup (if any)
+        uses: actions/download-artifact@v4
         with:
-          path: /var/lib/pterodactyl/volumes
-          key: pterodactyl-volumes
+          name: vps-backup
+          path: ./backup
+        continue-on-error: true
+
+      - name: Install prerequisites
+        run: |
+          sudo apt update
+          sudo apt install -y tmate curl unzip sudo net-tools neofetch
+
+      - name: Install Tailscale official script
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Restore backup files
+        run: |
+          if [ -f ./backup/backup.zip ]; then
+            unzip -o ./backup/backup.zip -d /
+          else
+            echo "No backup found, starting fresh"
+          fi
+
+      - name: Restore Tailscale state
+        run: |
+          if [ -f /opt/vps-backup/data/tailscaled.state ]; then
+            sudo mkdir -p /var/lib/tailscale
+            sudo cp /opt/vps-backup/data/tailscaled.state /var/lib/tailscale/tailscaled.state
+            sudo chmod 600 /var/lib/tailscale/tailscaled.state
+          fi
+
+      - name: Start Tailscale
+        run: |
+          sudo tailscaled &
+          sleep 8
+          sudo tailscale up --authkey ${{ secrets.TAILSCALE_AUTHKEY }} --hostname=biralo || echo "Tailscale already up"
+
+      - name: Create user biralo with sudo
+        run: |
+          if ! id -u biralo >/dev/null 2>&1; then
+            sudo useradd -m -s /bin/bash biralo
+            echo "biralo:biralo" | sudo chpasswd
+            sudo usermod -aG sudo biralo
+            echo "biralo ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/biralo
+          fi
+
+      - name: Start tmate session for SSH access
+        uses: mxschmitt/action-tmate@v3
+
+      - name: Show Tailscale IP and tmate info
+        run: |
+          echo "🔗 Tailscale IP:"
+          tailscale ip -4 || echo "Tailscale IP not found"
+          echo ""
+          echo "🔑 tmate SSH session:"
+          cat $HOME/.tmate.sock/ssh
+
+      - name: Sleep to keep VPS alive
+        run: sleep 21600  # 6 hours
+
+      - name: Backup VPS data and tailscale state
+        run: |
+          sudo mkdir -p /opt/vps-backup/data
+          sudo cp /var/lib/tailscale/tailscaled.state /opt/vps-backup/data/
+          sudo chown -R $USER:$USER /opt/vps-backup
+          zip -r backup.zip /opt/vps-backup
+
+      - name: Upload VPS backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-backup
+          path: backup.zip
