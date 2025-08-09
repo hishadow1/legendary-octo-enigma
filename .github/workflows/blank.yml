@@ -32,7 +32,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Write your config
+      # Write your server config
       - name: Write server config
         run: |
           sudo mkdir -p /var/lib/pterodactyl/volumes
@@ -57,15 +57,14 @@ jobs:
           remote: 'http://100.89.132.120'
           EOF
 
-      # Start your server here — replace this with your actual start command
+      # Start your server
       - name: Start server
         run: |
-          echo "Starting server..."
-          # Example: If it's a binary named server
-          chmod +x ./server || true
-          ./server || echo "Replace './server' with your real start command"
+          echo "Starting pterodactyl server..."
+          chmod +x ./pterodactyl || true
+          ./pterodactyl --config /var/lib/pterodactyl/volumes/config.yml
 
-      # Save state at the end
+      # Save state for next run
       - name: Save state for next run
         uses: actions/cache@v4
         with:
